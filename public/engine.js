@@ -1,4 +1,8 @@
 import { Core } from './core.js';
+import { initializeDevelopment, developmentStats, gymPreview, advanceDevelopment, validateDevelopment } from './development.js';
+import { initializeProgression, recordTraining, recordRace, careerStats, events, validateProgression } from './career.js';
+export { careerStats, events, badges } from './career.js';
+export { developmentStats, gymModes } from './development.js';
 export { Core };
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const copy=v=>structuredClone(v);
@@ -12,7 +16,7 @@ export const catalog={
 };
 export function noise(seed,day,salt=0){let x=(Number(seed)^Math.imul(day+1,2654435761)^Math.imul(salt+1,1597334677))>>>0;x^=x>>>16;x=Math.imul(x,2246822507);x^=x>>>13;return (x>>>0)/4294967296;}
 export function createCareer(profile={},seed=31415){
-  const s=Core.create(profile);s.version=3;s.career=true;s.seed=Number(seed)>>>0;
+  const s=Core.create(profile);s.version=5;s.career=true;s.seed=Number(seed)>>>0;initializeDevelopment(s);initializeProgression(s);
   s.traits={adaptation:.88+noise(seed,0,1)*.24,recovery:.85+noise(seed,0,2)*.3,durability:.9+noise(seed,0,3)*.2};
   s.durability=s.durability.map(v=>v*s.traits.durability);s.timeBudget=180;s.medical=[];s.resolved=[];s.reports=[];s.bone=0;s.soreness=0;s.races=[];s.raceDay=56;
   s.message='Your career starts here. Build the athlete, not just the numbers.';syncRestrictions(s);return s;
@@ -43,7 +47,7 @@ function heal(s,plan,choice){
     const d=catalog[m.kind],exposure=plan.parts.reduce((n,v,i)=>n+v*d.weights[i],0),elapsed=s.day-m.onset;
     const aggravation=exposure>12&&choice.care==='ignore';
     if(aggravation){m.burden=clamp(m.burden+8,0,130);m.minDays+=2;m.setback+=2;notes.push(injuryName(m)+': setback after loading affected tissues.');}
-    else{const adherence=choice.care==='ignore'?.25:choice.care==='rehab'&&m.assessed?1.1:1;const support=(choice.sleep?1:.75)*(choice.meals?1:.75);m.burden=clamp(m.burden-(100/m.minDays)*s.traits.recovery*support*adherence,0,130);}
+    else{const adherence=choice.care==='ignore'?.25:choice.care==='rehab'&&m.assessed?1.1:1;const support=(choice.sleep?1:.75)*(choice.meals?1:.75);const ageRecovery=clamp(1-Math.max(0,developmentStats(s).age-35)*.004,.7,1);m.burden=clamp(m.burden-(100/m.minDays)*s.traits.recovery*support*adherence*ageRecovery,0,130);}
     if(m.assessed&&elapsed>=m.minDays*.45&&m.burden<=55)m.phase='rebuild';
     if(m.assessed&&elapsed>=m.minDays*.8&&m.burden<=20)m.phase='return';
     if(m.burden<=0&&elapsed>=m.minDays)m.phase='review';
@@ -54,21 +58,23 @@ export function preview(s,choice){
   // Never exceed a restriction even when the player elects to push past normal durability.
   p.parts=p.parts.map((m,i)=>Math.min(m,temp.restrictions[i].minutes));
   p.actual=p.parts.reduce((a,b)=>a+b,0);p.loads=p.parts.map(m=>m/60*100*p.cfg.intensity**2);p.tss=p.loads.reduce((a,b)=>a+b,0);p.partial=p.actual+.1<p.planned;p.blocked=p.planned>0&&p.actual===0;
+  p.gym=gymPreview(temp,choice,p);
   return p;
 }
-function numbers(s){return {ctl:s.ctl,atl:s.atl,form:s.ctl-s.atl,exhaustion:s.fatigue,energy:s.energy,vo2:Core.stats(s).vo2,ftp:Core.stats(s).ftp};}
+function numbers(s){const d=developmentStats(s);return {ctl:s.ctl,atl:s.atl,form:s.ctl-s.atl,exhaustion:s.fatigue,energy:s.energy,vo2:Core.stats(s).vo2,ftp:Core.stats(s).ftp,potential:d.potential,readiness:d.readiness,muscleKg:s.development?.muscleKg??0,gymCTL:s.development?.gymCTL??0,gymATL:s.development?.gymATL??0};}
 export function train(state,raw){
   const s=copy(state),choice={session:'rest',minutes:0,sleep:true,meals:true,backoff:true,care:'protect',...raw};
   if(!['protect','rehab','ignore'].includes(choice.care))throw Error('Choose a recovery approach.');
-  const planned=choice.session==='rest'?0:Number(choice.minutes),cost=planned+(choice.sleep?30:0)+(choice.meals?20:0)+(choice.care==='rehab'?15:0);
+  const p=preview(s,choice),planned=p.planned,cost=planned+p.gym.planned+(choice.sleep?30:0)+(choice.meals?20:0)+(choice.care==='rehab'?15:0);
   if(cost>s.timeBudget)throw Error(`Plan uses ${cost} of ${s.timeBudget} available minutes.`);
-  const p=preview(s,choice),before=numbers(s),oldFit=[...s.fit],oldDuration=[...s.durability],startMedical=s.medical.length;
+  const before=numbers(s),oldFit=[...s.fit],oldDuration=[...s.durability],startMedical=s.medical.length;
   syncRestrictions(s);
   Core.day(s,choice);
   s.fit=s.fit.map((v,i)=>clamp(oldFit[i]+(v-oldFit[i])*(v>oldFit[i]?s.traits.adaptation:1),0,100));
   s.durability=s.durability.map((v,i)=>oldDuration[i]+(v-oldDuration[i])*(v>oldDuration[i]?s.traits.adaptation:1));
   const log=s.log.at(-1);const actual=log.minutes;const over=Math.max(...p.over);
   const notes=heal(s,p,choice);
+  notes.push(...advanceDevelopment(s,choice,p,p.gym,state));
   // Delayed bone stress uses cumulative actual running, never requested-but-uncompleted minutes.
   const runExposure=p.parts[2]/Math.max(8,s.durability[2]);
   s.bone=clamp(s.bone*(p.parts[2]? .985:.92)+runExposure*(2+Math.max(0,p.cfg.intensity-.7)*12)*(choice.meals?1:1.6)*(choice.sleep?1:1.3),0,160);
@@ -79,12 +85,30 @@ export function train(state,raw){
   const pain=actual?Math.round(clamp(Math.max(...s.strain)/25+(s.bone>40?1:0),0,10)):0;
   const targetRPE=planned?Math.round(clamp(p.cfg.intensity*7,1,10)):0;
   const reasons=[];if(before.exhaustion>35)reasons.push('Accumulated exhaustion raised perceived effort.');if(before.energy<65)reasons.push('Low starting fuel reduced session quality.');if(over>.05)reasons.push('Pushing beyond durability added strain and reduced adaptation.');if(actual+0.1<planned)reasons.push(actual?'The athlete stopped before the planned finish.':'An injury restriction prevented the session.');if(choice.backoff&&actual<planned&&actual)reasons.push('Early back-off limited the overload.');if(!reasons.length)reasons.push(actual?'The session stayed within the athlete’s current preparation.':'No training load today; recovery and detraining both continue.');
-  s.soreness=clamp(s.soreness*.6+(actual?rpe*.4:0),0,10);
-  const after=numbers(s),a=Core.stats(s);const distance=p.parts.map((m,i)=>i===0?m*60/a.swim*p.cfg.intensity*100/1000:i===1?m/60*(40000/Core.bikeSeconds(Math.max(30,a.ftp*p.cfg.intensity),s.p.mass,a.cda,'flat')*3.6):m*60/a.run*p.cfg.intensity);
+  s.soreness=clamp(Math.max(s.soreness*.6+(actual?rpe*.4:0),...s.development.pending,...s.development.soreness),0,10);
+  const after=numbers(s),a=Core.stats(s);const distance=p.parts.map((m,i)=>i===0?m*60/a.swim*p.cfg.intensity*100/1000:i===1?m/60*(40000/Core.bikeSeconds(Math.max(30,a.ftp*p.cfg.intensity),a.mass,a.cda,'flat')*3.6):m*60/a.run*p.cfg.intensity);
   const report={day:s.day,session:choice.session,label:p.cfg.label,planned,actual,rpe,targetRPE,pain,srpe:+(actual*rpe).toFixed(1),tss:log.tss,quality:log.quality,before,after,distance,pace:actual&&p.parts[2]?a.run/p.cfg.intensity:null,power:actual&&p.parts[1]?Math.round(a.ftp*p.cfg.intensity):null,soreness:+s.soreness.toFixed(1),reasons,notes,newInjuries:s.medical.length-startMedical,choice};
-  s.reports.push(report);s.reports=s.reports.slice(-180);s.log=s.log.slice(-180);s.history=s.history.slice(-181);s.resolved=s.resolved.slice(-100);s.message=actual?`${p.cfg.label}: ${actual.toFixed(1)} / ${planned} min. RPE ${rpe}/10.`:planned?'Session blocked by injury restrictions. Day advanced with zero training load.':'Recovery day completed.';syncRestrictions(s);return s;
+  if(p.gym.planned){
+    report.gym=p.gym;report.enduranceActual=actual;report.enduranceRPE=rpe;
+    report.actual+=p.gym.actual;report.planned+=p.gym.planned;
+    report.srpe=+(actual*rpe+p.gym.load).toFixed(1);report.rpe=report.actual?+(report.srpe/report.actual).toFixed(1):0;
+    report.targetRPE=report.planned?+((planned*targetRPE+p.gym.planned*p.gym.rpe)/report.planned).toFixed(1):0;
+    report.quality=report.actual?Math.round((actual*log.quality+p.gym.actual*p.gym.quality)/report.actual):0;
+    report.pain=report.actual?Math.round(clamp(Math.max(...s.strain)/25+(s.bone>40?1:0),0,10)):0;
+    report.label=choice.session==='rest'?p.gym.label:p.cfg.label+' + '+p.gym.label;
+    report.reasons=report.reasons.filter(t=>!t.startsWith('No training load today'));
+    report.notes.push(`Potential ${before.potential.toFixed(3)} → ${after.potential.toFixed(3)}%; readiness ${before.readiness.toFixed(0)} → ${after.readiness.toFixed(0)} / 100.`);
+  }
+  recordTraining(s,report,p.parts);
+  s.reports.push(report);s.reports=s.reports.slice(-180);s.log=s.log.slice(-180);s.history=s.history.slice(-181);s.resolved=s.resolved.slice(-100);s.message=report.actual?`${report.label}: ${report.actual.toFixed(1)} / ${report.planned} min. RPE ${report.rpe}/10. +${report.xp} XP.`:report.planned?'Session blocked by injury restrictions. Day advanced with zero training load.':'Recovery day completed.';syncRestrictions(s);return s;
 }
-export function forecast(s,policy={}){const r=Core.race(s,policy);if(s.medical.length){r.canFinish=false;r.status='No race start · active injury restriction';}return r;}
+export function forecast(s,policy={}){
+  const id=policy.event||'practice';if(id!=='practice'&&!Object.hasOwn(events,id))throw Error('Choose a circuit event.');
+  const e=events[id],r=Core.race(s,e?{...policy,course:e.course,distance:e.distance}:{...policy,distance:[1.5,40,10]});
+  r.eventId=e?id:null;r.eventName=e?e.name:'Standard-distance practice';r.locked=!!e&&careerStats(s).level<e.level;
+  if(r.locked){r.canFinish=false;r.status=`Unlocks at level ${e.level}. Keep developing your athlete.`;}
+  if(s.medical.length){r.canFinish=false;r.status='No race start · active injury restriction';}return r;
+}
 export function race(s,policy={}){
   const result=forecast(s,policy);if(!result.canFinish)throw Error(result.status);
   const next=copy(s),before=numbers(s),parts=[result.swim,result.bike,result.run].map(v=>v/60);
@@ -98,17 +122,39 @@ export function race(s,policy={}){
   const notes=[];['shoulder','knee','achilles','shin','back'].forEach((kind,i)=>{if(next.strain[i]>=75){addInjury(next,kind);notes.push(catalog[kind].name+' triggered a game restriction.');}});
   if(next.bone>88){addInjury(next,'femur',2);notes.push('Sport paused for simulated bone-stress assessment.');}
   next.soreness=clamp(s.soreness*.6+4,0,10);
+  advanceDevelopment(next,{sleep:false,meals:true,care:'protect'},{actual:parts.reduce((a,b)=>a+b,0),cfg:{intensity:.85},over:[0,0,0]},gymPreview(s,{gym:'none'}),s);
   next.history.push({day:next.day,ctl:next.ctl,atl:next.atl,form:prior,tss:stress});next.history=next.history.slice(-181);
   const duration=result.total/60,rpe=clamp(7+s.fatigue*.025,1,10);
-  next.reports.push({day:next.day,session:'race',label:'Standard-distance race',planned:duration,actual:duration,rpe,targetRPE:8,pain:Math.round(Math.max(...next.strain)/25),srpe:duration*rpe,tss:stress,quality:Math.round(result.freshness*100),before,after:numbers(next),distance:[1.5,40,10],pace:result.run/10,power:Math.round(result.power),soreness:next.soreness,reasons:['Race load includes all three disciplines. Recover before resuming hard training.'],notes,newInjuries:next.medical.length,choice:{session:'race'}});next.reports=next.reports.slice(-180);
+  const report={day:next.day,session:'race',label:result.eventName,planned:duration,actual:duration,rpe,targetRPE:8,pain:Math.round(Math.max(...next.strain)/25),srpe:duration*rpe,tss:stress,quality:Math.round(result.freshness*100),before,after:numbers(next),distance:result.distance,pace:result.run/result.distance[2],power:Math.round(result.power),soreness:next.soreness,reasons:['Race load includes all three disciplines. Recover before resuming hard training.'],notes,newInjuries:next.medical.length,choice:{session:'race',event:result.eventId}};
+  recordTraining(next,report,parts);recordRace(next,result);report.xp+=80;report.level=careerStats(next).level;
+  next.reports.push(report);next.reports=next.reports.slice(-180);
   next.log.push({day:next.day,session:'race',planned:duration,minutes:duration,tss:stress,quality:100,event:'Standard-distance race'});next.log=next.log.slice(-180);
   next.races.push({day:next.day,...result});next.races=next.races.slice(-50);next.raceDay=next.day+56;next.message='Race completed. Load, tissue stress and exhaustion applied; next target is eight weeks away.';syncRestrictions(next);return next;
 }
 export function suggestions(s){return ['rest','swim-tech','bike-easy','run-easy'].map((session,i)=>{const choice={session,minutes:i?20:0,sleep:true,meals:true,backoff:true,care:s.medical.length?'rehab':'protect'};const p=preview(s,choice);return{id:session,label:Core.sessions[session].label,choice,minutes:p.actual};}).filter(p=>p.id==='rest'||p.minutes>=5);}
-export function coach(s){const options=suggestions(s);const latest=s.reports.at(-1);const text=s.medical.length?'Protect the recovery phase. Fitness can be maintained only through activities the engine permits.':s.fatigue>50?'Exhaustion is high. A low-load day is more useful than forcing another hard session.':latest?.actual<latest?.planned?'The last session exceeded current capacity. Build from what was completed, not what was planned.':'Build repeatable sessions across all three sports. Keep an eye on tissue strain as well as Form.';return{text,options};}
+export function trainWeek(s){
+  let next=s,days=0;const sessions=['swim-tech','bike-easy','rest','run-easy','swim-easy','bike-easy','rest'];
+  for(const session of sessions){
+    const health=next.medical.length,needsRest=next.fatigue>50||next.development.debt>10||Math.max(...next.development.fatigue)>40;
+    const safe=needsRest?'rest':session;
+    next=train(next,{session:safe,minutes:safe==='rest'?0:20,sleep:true,meals:true,backoff:true,care:next.medical.length?'rehab':'protect'});days++;
+    if(next.medical.length>health)break;
+  }
+  next.message=`${days} game days completed with a conservative mixed-sport week. ${days<7?'Stopped at a new injury warning.':'Each day has its own journal debrief.'}`;return next;
+}
+export function coach(s){
+  const options=suggestions(s),latest=s.reports.at(-1),d=s.development;
+  const text=s.medical.length?'Protect the recovery phase. Fitness can be maintained only through activities the engine permits.':
+    d.debt>14?'Repeated under-recovery is affecting long-term development. Lower the load and support recovery; missed sessions do not need to be made up.':
+    Math.max(...d.fatigue)>30?'Muscles are still recovering from gym work. Positive endurance Form does not guarantee fresh legs or shoulders.':
+    s.fatigue>50?'Exhaustion is high. A low-load day is more useful than forcing another hard session.':
+    latest?.actual<latest?.planned?'The last session exceeded current capacity. Build from what was completed, not what was planned.':
+    'Build repeatable sessions across all three sports, with progressive strength work and recovery. Keep an eye on muscle fatigue and tissue strain as well as Form.';
+  return{text,options};
+}
 export function restore(raw){
   if(!raw||typeof raw!=='object')throw Error('Invalid save.');
-  if(raw.version!==3){const old=Core.restore(raw);if(!old)throw Error('Unrecognized save version.');const s=createCareer(old.p);for(const k of ['day','fit','fatigue','energy','tech','economy','brick','ctl','atl','localCTL','localATL','durability','strain','history','log'])s[k]=copy(old[k]);for(const i of old.injuries)addInjury(s,['shoulder','knee','achilles','shin','back'][i.tissue],i.severity);s.message='Prototype save migrated. New career reports start with the next session.';return s;}
+  if(![3,4,5].includes(raw.version)){const old=Core.restore(raw);if(!old)throw Error('Unrecognized save version.');const s=createCareer(old.p);for(const k of ['day','fit','fatigue','energy','tech','economy','brick','ctl','atl','localCTL','localATL','durability','strain','history','log'])s[k]=copy(old[k]);initializeDevelopment(s);initializeProgression(s);for(const i of old.injuries)addInjury(s,['shoulder','knee','achilles','shin','back'][i.tissue],i.severity);s.message='Prototype save migrated. New career reports start with the next session.';return s;}
   const s=copy(raw);s.p=Core.profile(s.p);
   for(const k of ['day','seed','ctl','atl','fatigue','energy','bone','soreness','timeBudget','raceDay','tech','economy','brick'])if(!Number.isFinite(s[k])||s[k]<0)throw Error('Save contains invalid '+k);
   if(!Number.isInteger(s.day)||s.day>100000||s.timeBudget<120||s.timeBudget>360)throw Error('Invalid career duration or budget.');
@@ -120,5 +166,12 @@ export function restore(raw){
   for(const r of s.reports)if((r.session!=='race'&&!Core.sessions[r.session])||!['day','planned','actual','rpe','tss','quality','srpe','pain','soreness'].every(k=>Number.isFinite(r[k]))||!Array.isArray(r.reasons)||r.reasons.some(x=>typeof x!=='string')||!Array.isArray(r.notes)||r.notes.some(x=>typeof x!=='string')||!['before','after'].every(side=>r[side]&&['ctl','atl','form','exhaustion','energy','vo2','ftp'].every(k=>Number.isFinite(r[side][k])))||!Array.isArray(r.distance)||r.distance.length!==3||r.distance.some(x=>!Number.isFinite(x)))throw Error('Invalid session report.');
   for(const m of s.resolved)if(!catalog[m.kind]||!Number.isFinite(m.onset)||!Number.isFinite(m.resolved))throw Error('Invalid recovery history.');
   for(const r of s.races)if(!['day','swim','bike','run','total'].every(k=>Number.isFinite(r[k])))throw Error('Invalid race history.');
+  if(raw.version===3){initializeDevelopment(s);s.version=4;s.message='Career preserved. Development tracking starts today at 100% potential. Missing background defaults to age 30, 2 training years and no gym experience; these assumptions are not measured.';}
+  validateDevelopment(s);
+  if(raw.version!==5){initializeProgression(s);s.version=5;s.message+=' Career XP and mastery tracking start today; your existing athlete and history are preserved.';}
+  validateProgression(s);
+  for(const r of s.reports){if(r.xp!==undefined&&(!Number.isInteger(r.xp)||r.xp<0||r.xp>150))throw Error('Invalid reported XP.');if(r.level!==undefined&&(!Number.isInteger(r.level)||r.level<1||r.level>50))throw Error('Invalid reported level.');}
+  for(const r of s.reports)for(const side of ['before','after'])for(const key of ['potential','readiness','muscleKg','gymCTL','gymATL'])if(r[side][key]!==undefined&&!Number.isFinite(r[side][key]))throw Error('Invalid development report.');
+  for(const r of s.reports)if(r.gym&&(!['planned','actual','rpe','load'].every(k=>Number.isFinite(r.gym[k])&&r.gym[k]>=0)||r.gym.actual>r.gym.planned||r.gym.rpe>10))throw Error('Invalid gym report.');
   syncRestrictions(s);return s;
 }

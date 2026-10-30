@@ -1,8 +1,9 @@
+import { developmentStats } from './development.js';
 /* Pure, deterministic game model. Constants are game tuning, not clinical estimates. */
 export const Core = (() => {
   const clamp = (x,a,b) => Math.min(b,Math.max(a,x));
   const average = a => a.reduce((x,y)=>x+y,0)/a.length;
-  const defaultProfile = {mass:75,height:180,vo2:52,ftp:240,swim:115,run:300,build:1,cda:null,ctl:15,atl:15,longSwim:30,longBike:60,longRun:30};
+  const defaultProfile = {mass:75,height:180,vo2:52,ftp:240,swim:115,run:300,build:1,cda:null,ctl:15,atl:15,longSwim:30,longBike:60,longRun:30,age:30,experienceYears:2,strengthYears:0,musclePercent:40};
   const sports=['Swim','Bike','Run'];
   const tissueNames=['Shoulder irritation','Anterior knee pain','Achilles irritation','Shin overload','Lower-back irritation'];
   // Fictional tissue-exposure weights, NOT clinical injury probabilities.
@@ -23,6 +24,8 @@ export const Core = (() => {
     const p={...defaultProfile,...raw};
     const ranges={mass:[40,130],height:[140,210],vo2:[25,85],ftp:[80,500],swim:[65,240],run:[170,540],build:[0.94,1.06],ctl:[0,150],atl:[0,200],longSwim:[5,180],longBike:[5,300],longRun:[5,180]};
     for(const [key,[lo,hi]] of Object.entries(ranges)) { if(!Number.isFinite(+p[key]) || +p[key]<lo || +p[key]>hi) throw new Error('Check the '+key+' value.'); p[key]=+p[key]; }
+    for(const [key,lo,hi] of [['age',18,85],['experienceYears',0,73],['strengthYears',0,73],['musclePercent',20,60]]){if(!Number.isFinite(+p[key])||+p[key]<lo||+p[key]>hi)throw Error('Check the '+key+' value.');p[key]=+p[key];}
+    if(Math.max(p.experienceYears,p.strengthYears)>p.age-12)throw Error('Training experience cannot exceed age minus 12 years.');
     if(p.cda==='' || p.cda===null) p.cda=null;
     else if(!Number.isFinite(+p.cda) || +p.cda<0.18 || +p.cda>0.65) throw new Error('Drag area must be 0.18–0.65 m².');
     else p.cda=+p.cda;
@@ -35,13 +38,15 @@ export const Core = (() => {
   }
   function stats(s) {
     const aerobic=average(s.fit)-18;
-    const vo2Factor=clamp(1+0.0022*aerobic,0.88,1.2);
+    const d=developmentStats(s),ceiling=max=>1+(max-1)*d.potential/100;
+    const vo2Factor=clamp(1+0.0022*aerobic,0.88,ceiling(1.2));
     // Shared adaptation changes VO2max; baseline FTP and paces remain independent inputs.
     return {
-      vo2:s.p.vo2*vo2Factor,
-      ftp:s.p.ftp*clamp(1+0.003*(s.fit[1]-18)+0.0008*aerobic,0.85,1.35),
-      swim:s.p.swim/clamp(1+0.0026*(s.fit[0]-18)+s.tech*0.003,0.85,1.3),
-      run:s.p.run/clamp(1+0.0028*(s.fit[2]-18)+0.0008*aerobic+s.economy*0.002,0.85,1.3),
+      vo2:s.p.vo2*vo2Factor*s.p.mass/d.mass,
+      ftp:s.p.ftp*clamp(1+0.003*(s.fit[1]-18)+0.0008*aerobic+d.bonus[1],0.85,ceiling(1.35)),
+      swim:s.p.swim/clamp(1+0.0026*(s.fit[0]-18)+s.tech*0.003+d.bonus[0],0.85,ceiling(1.3)),
+      run:s.p.run/clamp(1+0.0028*(s.fit[2]-18)+0.0008*aerobic+s.economy*0.002+d.bonus[2],0.85,ceiling(1.3)),
+      mass:d.mass,
       cda:s.p.cda ?? 0.30*Math.pow(s.p.height/180,1.15)*Math.pow(s.p.mass/75,0.3)*s.p.build
     };
   }
@@ -62,7 +67,7 @@ export const Core = (() => {
     const rule=s.restrictions?.[sport];
     if(rule && intensity>rule.maxIF)return 0;
     for(const injury of s.injuries)if(tissueWeights[sport][injury.tissue]>=0.35)restriction=Math.min(restriction,injury.severity>=2||intensity>0.75?0:0.35);
-    return Math.min(rule?.minutes??Infinity,Math.max(0,s.durability[sport]*freshness*fuel*conditioning*Math.pow(0.65/Math.max(0.45,intensity),1.5)*restriction));
+    return Math.min(rule?.minutes??Infinity,Math.max(0,s.durability[sport]*freshness*fuel*conditioning*Math.pow(0.65/Math.max(0.45,intensity),1.5)*restriction*developmentStats(s).capacity[sport]));
   }
   function preview(s,choice) {
     const cfg=sessions[choice.session];if(!cfg)throw new Error('Choose a session.');
@@ -88,7 +93,8 @@ export const Core = (() => {
       if(!minutes)return;
       const dose=minutes/Math.max(5,plan.comfort[i]);
       const repeated=Math.max(0,s.localATL[i]-s.localCTL[i]-5)*0.35;
-      const demand=(8*dose*Math.pow(plan.cfg.intensity/0.65,2)+45*Math.max(0,dose-0.8)**2+repeated)*(i===2?1.25:1);
+      const resilience=clamp(developmentStats(s).bonus[i]*2,0,.1);
+      const demand=(8*dose*Math.pow(plan.cfg.intensity/0.65,2)+45*Math.max(0,dose-0.8)**2+repeated)*(i===2?1.25:1)*(1-resilience);
       tissueWeights[i].forEach((weight,j)=>exposure[j]+=demand*weight);
     });
     s.strain=s.strain.map((v,j)=>clamp(v*(exposure[j]>2?(choice.sleep?0.94:0.98):(choice.sleep?0.78:0.88))+exposure[j]*(choice.meals?1:1.1),0,140));
@@ -167,32 +173,35 @@ export const Core = (() => {
     },0);
   }
   function race(s,policy={}) {
-    const options={effort:88,course:'rolling',run:'steady',fuel:'practiced',...policy};
+    const options={effort:88,course:'rolling',run:'steady',fuel:'practiced',distance:[1.5,40,10],...policy};
+    if(!Array.isArray(options.distance)||options.distance.length!==3||options.distance.some((v,i)=>!Number.isFinite(v)||v<=0||v>[4,180,42.2][i]))throw Error('Invalid race distance.');
+    const [swimKm,bikeKm,runKm]=options.distance,mastery=s.progression?.mastery||[0,0,0],craft=(s.progression?.raceCraft||0)/100;
     if(!['flat','rolling','hilly'].includes(options.course)||!['steady','conservative','attack'].includes(options.run)||!['light','practiced','excess'].includes(options.fuel)) throw new Error('Invalid race strategy.');
     const intensity=clamp(Number(options.effort)||88,70,110)/100;
     const a=stats(s);
-    const freshness=clamp(1-s.fatigue*0.0015-(100-s.energy)*0.0006-Math.max(0,s.atl-s.ctl)*0.001,0.68,1);
+    const muscleReadiness=Math.min(...developmentStats(s).capacity);
+    const freshness=clamp((1-s.fatigue*0.0015-(100-s.energy)*0.0006-Math.max(0,s.atl-s.ctl)*0.001)*(0.7+muscleReadiness*.3),0.58,1);
     // Relative VO2 sets modest endurance headroom, independent of measured pace/FTP.
     const endurance=clamp(Math.sqrt(a.vo2/52),0.75,1.25);
-    const swim=a.swim*15*1.035/freshness;
+    const swim=a.swim*swimKm*10*1.035/freshness/(1+mastery[0]*.0006);
     const fade=Math.max(0,intensity-0.96)**2*6/endurance;
     const power=a.ftp*intensity*freshness*(1-fade);
-    const bike=bikeSeconds(power,s.p.mass,a.cda,options.course);
+    const bike=bikeSeconds(power,a.mass,a.cda,options.course)*bikeKm/40/(1+mastery[1]*.0003);
     const fuelDrain=swim/60*0.35+bike/60*(0.52+Math.pow(Math.max(0,intensity-0.75),2)*3);
-    const replenishment=options.fuel==='light'?5:options.fuel==='practiced'?34:40;
+    const replenishment=(options.fuel==='light'?5:options.fuel==='practiced'?34:40)*Math.min(1,(swimKm*10+bikeKm+runKm)/65);
     const runFuel=clamp(s.energy-fuelDrain+replenishment,0,100);
-    const carry=0.025+Math.max(0,intensity-0.82)**2*3.4/endurance+Math.max(0,bike/3600-1)*0.02;
+    const carry=(0.025+Math.max(0,intensity-0.82)**2*3.4/endurance+Math.max(0,bike/3600-1)*0.02)*(1-craft*.35);
     const brickBenefit=clamp(s.brick*0.0015,0,0.015);
     const lowFuel=Math.max(0,48-runFuel)*0.006;
     // A restrained start costs time when fresh, but limits late fading when depleted.
     const runApproach=options.run==='conservative'?0.022-0.35*Math.max(0,carry-0.025)-0.25*lowFuel:options.run==='attack'?(-0.02+0.09*Math.max(0,intensity-0.88)/0.22+s.fatigue*0.0007+Math.max(0,55-runFuel)*0.002):0;
     const gutCost=options.fuel==='excess'?150:0;
-    const baseRun=a.run*10*1.025/freshness;
+    const baseRun=a.run*runKm*1.025/freshness/(1+mastery[2]*.0004);
     const run=baseRun*(1+carry-brickBenefit+lowFuel+runApproach)+gutCost;
-    const transitions=180;
+    const transitions=180-craft*90;
     const underprepared=[swim,bike,run].map((seconds,i)=>seconds/60>s.durability[i]*1.7*freshness?sports[i]:null).filter(Boolean);
     const status=s.injuries.length?'Injury restriction · no race start':underprepared.length?'DNF forecast · '+underprepared.join(' / ')+' durability':'Finish forecast';
-    return {swim,bike,run,transitions,total:swim+bike+run+transitions,power,runFuel,carrySeconds:baseRun*(carry-brickBenefit),fuelSeconds:baseRun*lowFuel+gutCost,freshness,status,canFinish:!s.injuries.length&&!underprepared.length};
+    return {swim,bike,run,transitions,distance:[...options.distance],total:swim+bike+run+transitions,power,runFuel,carrySeconds:baseRun*(carry-brickBenefit),fuelSeconds:baseRun*lowFuel+gutCost,freshness,status,canFinish:!s.injuries.length&&!underprepared.length};
   }
   function restore(raw) {
     if(!raw||![1,2].includes(raw.version)||!Number.isInteger(raw.day)||raw.day<0||raw.day>56) return null;

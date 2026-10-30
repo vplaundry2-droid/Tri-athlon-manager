@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 
 const publicDir=fileURLToPath(new URL('./public/',import.meta.url));
 const files=new Map([['/','index.html'],['/index.html','index.html'],['/styles.css','styles.css'],['/components.css','components.css'],['/app.js','app.js'],['/core.js','core.js'],['/engine.js','engine.js']]);
+for(const file of ['development.js','development-ui.js','career.js','career-ui.js','career.css'])files.set('/'+file,file);
 const types={html:'text/html; charset=utf-8',js:'text/javascript; charset=utf-8',css:'text/css; charset=utf-8'};
 const supported=['rest','swim-tech','bike-easy','run-easy'];
 export function validateSummary(input){

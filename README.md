@@ -1,6 +1,6 @@
 # Triathlon Manager
 
-A browser-based triathlon management game. Build a fictional athlete through swimming, cycling, running, recovery and standard-distance races. No 3D engine, account, package installation or AI subscription is required to play.
+A browser-based triathlon management game. Build a fictional athlete through swimming, cycling, running, gym training, recovery and standard-distance races. No 3D engine, account, package installation or AI subscription is required to play.
 
 **Playable alpha, not a medically validated training tool.** Injury probabilities, diagnoses, recovery windows and rehabilitation stages are gameplay assumptions, not individual medical predictions or treatment advice. In particular, a suspected femoral-neck bone stress injury does **not** automatically permit easy cycling.
 
@@ -18,17 +18,24 @@ In GitHub Desktop choose **File → Add local repository** and select this folde
 
 ## What's implemented
 
+- Version 0.3: redesigned career dashboard, 50 XP levels, sport mastery, race craft, calendar seasons, training-hour totals and earned milestones. In-game time advances age; idle time never earns XP. A conservative seven-day option retains every debrief and stops at new injuries.
+- Four fixed-course circuit challenges, from a super-sprint to a hilly standard-distance race, with level gates, bronze/silver/gold benchmarks and persistent personal bests. Mastery and race craft affect execution; XP level itself never grants speed or overrides injury/preparation checks. These are local challenges, **not multiplayer or online leaderboards**.
+- Version 0.2: every new athlete starts at 100% personal potential, separate from current fitness. Age, training experience, conditioning and sustained recovery debt affect future development; isolated difficult sessions do not erase potential.
+- Gym-only or combined days: foundation, strength, power, hypertrophy and trunk emphasis; muscle targeting, controlled/failure effort, session spacing, technique limits, regional fatigue, delayed soreness and cross-sport restrictions.
+- Strength contributes to usable force/economy and modestly to tissue tolerance. Modelled muscle mass and oxidative/fast-fibre endurance indices are explicitly fictional. Separate gym 42/7-day AU averages and whole-body readiness avoid conflating gym load with endurance TSS.
 - Editable athlete: mass, height, body build, VO₂max, FTP, swim/run thresholds, starting CTL/ATL and independent sport durability. Optional measured drag area.
 - Daily sessions, bricks, sleep/fueling choices, time budgets and early back-off. Requested training is limited by actual capacity; incomplete work never earns training load.
 - Post-session debrief: planned vs completed duration, simulated RPE, pain separately, estimated TSS, session-RPE load, quality, distance/pace/power estimates, exhaustion/fuel/load changes and explanation of setbacks.
 - CTL/ATL/Form history; fatigue and fuel are separate state, not synonyms for ATL.
 - Shoulder, knee, Achilles, shin and lower-back cases; cumulative bone stress can trigger a suspected femoral injury. Multiple cases combine cross-sport restrictions.
 - Protected recovery, simulated assessment, gradual rebuilding, return stages and final reassessment. Neglected rehabilitation, insufficient sleep/fuel and permitted-but-aggravating activity can delay healing. There is no guaranteed clearance date.
-- Ongoing career, reproducible seeded traits, undo, autosave, JSON import/export and migration from the earlier v1/v2 prototype. Latest 180 debriefs, 90 chart days and 50 races are displayed/stored as applicable.
+- Ongoing career, reproducible seeded traits, undo, autosave, JSON import/export and migration from v1/v2/v3/v4 saves to v5. Latest 180 debriefs, 90 chart days and 50 races are displayed/stored as applicable. Earlier physiology and history are preserved; new lifetime XP/mastery tracking starts at migration without inventing missing historical work.
 - Standard-distance race strategy: 1.5 km swim, 40 km bike, 10 km run; bike effort, hills, fuel and run pacing affect outcome. Underprepared or injured athletes cannot enter a forecast finish. Race completion applies load, fuel cost, tissue strain and exhaustion.
 - Local rules coach, plus an **optional server-side AI narrator**. AI cannot edit state, clear injuries or execute sessions.
 
 ## Model boundaries and sources
+
+See [MODEL_PRINCIPLES.md](MODEL_PRINCIPLES.md) for the principle-to-mechanic map, invented coefficients, evidence disagreements and compatibility notes. [SOURCE_COVERAGE.md](SOURCE_COVERAGE.md) inventories all 116 local Masters cycling / SSISA PDFs with review depth and implementation status. Only selected principles are implemented; full periodization, nutrition/hydration, environmental physiology and other topics remain deferred. The full Kindle edition of Joe Friel's book was not accessed; references to Friel are limited to public guidance. Course PDFs/extracted contents are not distributed.
 
 Daily recurrence: `CTL += (estimatedTSS - CTL) / 42`; `ATL += (estimatedTSS - ATL) / 7`. Chart Form for day D is the previous evening's CTL minus ATL. The headline card shows Form for the next morning.
 
